@@ -1,0 +1,28 @@
+; Основной файл топологии для системы pept1_lig1
+
+; Включаем основное силовое поле
+#include "amber14sb.ff/forcefield.itp"
+
+; Включаем типы атомов лиганда (GAFF2)
+#include "atomtypes_lig1_bcc_manual.itp"
+
+; Включаем топологию лиганда
+#include "atomtypes_lig1_bcc_manual.itp"
+
+; Включаем топологию пептида (как отдельный ITP)
+#include "pept1.itp"
+
+; Включаем модель воды
+#include "amber14sb.ff/tip3p.itp"
+
+; Включаем ионы
+#include "amber14sb.ff/ions.itp"
+
+[ system ]
+pept1_lig1 in water
+
+[ molecules ]
+; Compound        nmols
+;     1
+      1
+; Вода и ионы будут добавлены позже командами solvate/genion

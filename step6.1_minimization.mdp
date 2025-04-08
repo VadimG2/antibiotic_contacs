@@ -1,0 +1,15 @@
+; --- Параметры для минимизации энергии ---
+title           = Energy Minimization
+integrator      = steep         ; Алгоритм: Steepest Descent (хорошо для начала)
+nsteps          = 5000          ; Максимальное число шагов минимизации
+emtol           = 1000.0        ; Завершить, если макс. сила < 1000 kJ/mol/nm
+emstep          = 0.01          ; Начальный размер шага (nm)
+
+; Параметры для соседей, обрезки и PME (нужны для grompp)
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 10
+rcoulomb        = 1.2           ; Обрезка для Кулона
+rvdw            = 1.2           ; Обрезка для Ван-дер-Ваальса
+pbc             = xyz           ; Периодические условия во всех направлениях
+coulombtype     = PME           ; Электростатика PME
