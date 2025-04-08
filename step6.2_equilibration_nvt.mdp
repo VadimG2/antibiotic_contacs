@@ -1,0 +1,45 @@
+; --- Параметры для NVT уравновешивания ---
+title           = NVT Equilibration
+define          = -DPOSRES      ; Включаем позиционные ограничения (см. ниже!)
+integrator      = md            ; Алгоритм: Leap-frog MD
+nsteps          = 50000         ; Время: 100 ps (50000 шагов * 0.002 ps/шаг)
+dt              = 0.002         ; Шаг интегрирования 2 fs
+
+; Вывод
+nstxout-compressed  = 5000      ; Сохранять координаты каждые 10 ps
+nstlog          = 5000      ; Писать в лог каждые 10 ps
+nstenergy       = 5000      ; Сохранять энергии каждые 10 ps
+
+; Связи
+constraints     = h-bonds       ; Ограничиваем связи с H (для шага 2 fs)
+constraint_algorithm = LINCS
+
+; Обрезки и соседи
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 20            ; Чаще обновляем список соседей
+rcoulomb        = 1.2
+rvdw            = 1.2
+DispCorr        = EnerPres
+
+; Электростатика PME
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.16
+
+; Температура (V-rescale) - раздельные группы для лучшего контроля
+tcoupl          = V-rescale
+tc-grps         = Protein_AAY   Water_and_ions ; <-- ПРОВЕРЬТЕ ЭТИ ИМЕНА ГРУПП!
+tau_t           = 0.1           0.1         ; Время связи (ps)
+ref_t           = 300           300         ; Целевая температура (K)
+
+; Давление - НЕТ (NVT ансамбль)
+pcoupl          = no
+
+; Начальные скорости
+gen_vel         = yes           ; Генерировать скорости из распр. Максвелла
+gen_temp        = 300           ; Температура для генерации
+gen_seed        = -1            ; Случайное число
+
+; PBC
+pbc             = xyz

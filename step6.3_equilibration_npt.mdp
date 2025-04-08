@@ -1,0 +1,46 @@
+; --- Параметры для NPT уравновешивания ---
+title           = NPT Equilibration
+define          = -DPOSRES      ; ПОЗИЦИОННЫЕ ОГРАНИЧЕНИЯ ВСЕ ЕЩЕ ВКЛЮЧЕНЫ!
+integrator      = md
+nsteps          = 500000        ; Время: 500 ps (500000 * 0.001 ps/шаг) - как в PDF
+dt              = 0.001         ; Шаг 1 fs для стабильности с баростатом в начале
+
+; Вывод (можно реже, чем в NVT)
+nstxout-compressed  = 5000      ; Сохранять координаты каждые 5 ps
+nstlog          = 5000
+nstenergy       = 5000
+
+; Связи
+constraints     = h-bonds
+constraint_algorithm = LINCS
+
+; Обрезки, PME и т.д. - как в NVT
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 20
+rcoulomb        = 1.2
+rvdw            = 1.2
+DispCorr        = EnerPres
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.16
+
+; Температура (как в NVT)
+tcoupl          = V-rescale
+tc-grps         = Protein_AAY   Water_and_ions ; <-- ПРОВЕРЬТЕ ИМЕНА ГРУПП!
+tau_t           = 0.1           0.1
+ref_t           = 300           300
+
+; Давление (Parrinello-Rahman - хороший выбор)
+pcoupl          = Parrinello-Rahman
+pcoupltype      = isotropic     ; Изотропное давление
+tau_p           = 2.0           ; Время связи (ps)
+ref_p           = 1.0           ; Целевое давление (bar)
+compressibility = 4.5e-5        ; Сжимаемость воды
+
+; Начальные скорости - НЕТ, продолжаем с NVT
+gen_vel         = no
+continuation    = yes           ; Продолжаем с предыдущего этапа
+
+; PBC
+pbc             = xyz

@@ -1,0 +1,48 @@
+; --- Параметры для продуктивной МД (200 нс) ---
+title           = Production MD (200 ns)
+; define        =                ; ПОЗИЦИОННЫЕ ОГРАНИЧЕНИЯ ВЫКЛЮЧЕНЫ! (закомментировано или удалено)
+integrator      = md
+nsteps          = 1000000     ; Время: 200 ns (100,000,000 * 0.002 ps/шаг)
+dt              = 0.002         ; Шаг 2 fs
+
+; Вывод (частота зависит от нужд анализа)
+nstxout-compressed  = 5000      ; Сохранять координаты каждые 10 ps (5000 * 2 fs)
+nstlog          = 5000      ; Писать в лог каждые 10 ps
+nstenergy       = 5000      ; Сохранять энергии каждые 10 ps
+nstvout         = 0             ; Скорости не сохраняем часто
+nstfout         = 0             ; Силы не сохраняем часто
+
+; Связи
+constraints     = h-bonds
+constraint_algorithm = LINCS
+
+; Обрезки, PME и т.д. - как в NPT
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 20
+rcoulomb        = 1.2
+rvdw            = 1.2
+DispCorr        = EnerPres
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.16
+
+; Температура (как в NPT)
+tcoupl          = V-rescale
+tc-grps         = Protein_AAY   Water_and_ions ; <-- ПРОВЕРЬТЕ ИМЕНА ГРУПП!
+tau_t           = 0.1           0.1
+ref_t           = 300           300
+
+; Давление (как в NPT)
+pcoupl          = Parrinello-Rahman
+pcoupltype      = isotropic
+tau_p           = 2.0
+ref_p           = 1.0
+compressibility = 4.5e-5
+
+; Начало и продолжение
+gen_vel         = no
+continuation    = yes           ; Продолжаем с NPT
+
+; PBC
+pbc             = xyz
