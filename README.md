@@ -72,33 +72,10 @@
 3.  **Установить силовое поле AMBER14SB:**
     *Пакет GROMACS из Conda Forge не всегда включает все силовые поля. Этот шаг скачивает и устанавливает AMBER14SB в созданное окружение.*
     ```bash
-    # Определяем путь к папке GROMACS top внутри окружения
-    GMX_TOP_DIR=$( cd "$( dirname "${CONDA_PREFIX}" )/envs/${CONDA_DEFAULT_ENV}/share/gromacs/top" &> /dev/null && pwd )
-
-    if [ -z "${GMX_TOP_DIR}" ] || [ ! -d "${GMX_TOP_DIR}" ]; then
-        echo "ОШИБКА: Не удалось найти директорию GROMACS top в окружении ${CONDA_DEFAULT_ENV}"
-        exit 1
-    fi
-
-    echo "Установка AMBER14SB в ${GMX_TOP_DIR}..."
-
-    FF_URL="https://ftp.gromacs.org/contrib/forcefields/amber14sb.ff.tar.gz" # Используем официальный FTP
-    FF_ARCHIVE_NAME="amber14sb.ff.tar.gz"
-    FF_DIR_NAME="amber14sb.ff"
-
-    if [ ! -d "${GMX_TOP_DIR}/${FF_DIR_NAME}" ]; then
-        wget -q --show-progress "${FF_URL}" -O "${GMX_TOP_DIR}/${FF_ARCHIVE_NAME}"
-        if [ $? -ne 0 ]; then echo "ОШИБКА: Скачивание ${FF_ARCHIVE_NAME}"; exit 1; fi
-        echo "Распаковка..."
-        tar -xzf "${GMX_TOP_DIR}/${FF_ARCHIVE_NAME}" -C "${GMX_TOP_DIR}/"
-        if [ $? -ne 0 ]; then echo "ОШИБКА: Распаковка ${FF_ARCHIVE_NAME}"; exit 1; fi
-        rm "${GMX_TOP_DIR}/${FF_ARCHIVE_NAME}"
-        echo "Силовое поле AMBER14SB установлено."
-    else
-        echo "Силовое поле AMBER14SB уже существует."
-    fi
+    wget -O ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz https://ftp.gromacs.org/contrib/forcefields/amber14sb.ff.tar.gz
+    tar -xvf ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz -C ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/
+    rm ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz
     ```
-    *Примечание: Этот блок можно вынести в отдельный скрипт `post_create_setup.sh`, как обсуждалось ранее.*
 
 4.  **Подготовить входные файлы:**
     *   Поместите PDB файлы ваших **пептидов** в директорию `input/protein/`.
