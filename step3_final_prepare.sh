@@ -1,69 +1,68 @@
 #!/bin/bash
 
-# --- Директории ---
-OUTPUT_BASE_DIR="output" # Директория, где лежат папки с результатами Шага 2
+# --- Пути к директориям ---
+INPUT_DIR="output"  # Папка, где лежат папки с подготовленными пептидами (pept1, pept2...)
+OUTPUT_DIR="output" # Сюда же будем класть optimized.gro
 
-# --- Параметры отжига ---
-ANNEAL_TIME_PS=500
+echo "=== НАЧАЛО ОПТИМИЗАЦИИ ГЕОМЕТРИИ ПЕПТИДОВ (ОТЖИГ - ТЕСТ 5ps) ==="
+
+# --- Параметры ---
+# --- ДЛЯ ТЕСТА ---
+TEST_STEPS=5000           # 5000 шагов
+TEST_TIME_PS=5             # Соответствует 5 ps при dt=0.001
+TEST_DUMP_TIME=5           # Время для извлечения кадра
+# --- Финальные параметры (закомментированы) ---
+# ANNEAL_STEPS=500000        # 500 ps
+# ANNEAL_TIME_PS=500
+# ANNEAL_DUMP_TIME=500
+# --- Общие параметры отжига ---
 ANNEAL_TEMP_LOW=5
 ANNEAL_TEMP_HIGH=400
-ANNEAL_TIME_RAMP_PS=250
+ANNEAL_TIME_RAMP_PS=2.5 # Для 5ps теста делаем нагрев за половину времени
 
-echo "--- НАЧАЛО: Отжиг для всех подготовленных пептидов ---"
+# --- Определяем параметры для текущего запуска (тест или полный) ---
+NSTEPS=${TEST_STEPS}
+DUMP_TIME=${TEST_DUMP_TIME}
+ANNEAL_TOTAL_TIME=${TEST_TIME_PS} # Общее время для mdp (в ps)
+# ANNEAL_TOTAL_TIME=${ANNEAL_TIME_PS} # Для полного запуска
+ANNEAL_RAMP_TIME=$(echo "$ANNEAL_TOTAL_TIME / 2" | bc -l) # Время нагрева - половина
 
-# Проверяем наличие базовой выходной директории
-if [ ! -d "${OUTPUT_BASE_DIR}" ]; then
-    echo "ОШИБКА: Базовая директория ${OUTPUT_BASE_DIR} не найдена! Запустите сначала prepare_all_peptides.sh."
-    exit 1
-fi
+# Итерация по всем папкам пептидов в output/
+for peptide_dir in "${INPUT_DIR}"/*; do
+    if [ -d "${peptide_dir}" ]; then
+        peptide_base=$(basename "${peptide_dir}")
+        PEPTIDE_GRO="${peptide_dir}/${peptide_base}.gro"  # Входной файл от шага 2
+        PEPTIDE_TOP="${peptide_dir}/${peptide_base}.top"  # Входной файл от шага 2
+        OPTIMIZED_GRO="${peptide_dir}/${peptide_base}_optimized.gro"  # Выходной файл
 
-# --- Итерация по всем поддиректориям в output ---
-for PEPTIDE_DIR in "${OUTPUT_BASE_DIR}"/*/; do
-    # Убираем слэш в конце имени директории
-    PEPTIDE_DIR=${PEPTIDE_DIR%/}
-    # Получаем базовое имя пептида из имени директории
-    PEPTIDE_BASENAME=$(basename "${PEPTIDE_DIR}")
+        # Проверка наличия входных файлов
+        if [ ! -f "${PEPTIDE_GRO}" ] || [ ! -f "${PEPTIDE_TOP}" ]; then
+            echo "Пропуск: ${peptide_dir} не содержит файлов пептида (${peptide_base}.gro или ${peptide_base}.top)"
+            continue
+        fi
 
-    echo ""
-    echo "--- Обработка пептида: ${PEPTIDE_BASENAME} (в директории ${PEPTIDE_DIR}) ---"
+        echo ""
+        echo "--- ШАГ 3: Оптимизация геометрии пептида ${peptide_base} (Отжиг - Тест ${ANNEAL_TOTAL_TIME} ps) ---"
 
-    # Определяем пути к входным файлам
-    PEPTIDE_GRO_INPUT="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}.gro"
-    PEPTIDE_TOP_INPUT="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}.top"
+        # Удаляем старые файлы отжига перед запуском
+        rm -f "${peptide_dir}/${peptide_base}_box.gro" "${peptide_dir}/anneal.mdp" "${peptide_dir}/${peptide_base}_anneal."* "${peptide_dir}/mdout.mdp" "${OPTIMIZED_GRO}"
 
-    # Проверяем наличие входных файлов
-    if [ ! -f "${PEPTIDE_GRO_INPUT}" ] || [ ! -f "${PEPTIDE_TOP_INPUT}" ]; then
-        echo "ВНИМАНИЕ: Отсутствуют файлы ${PEPTIDE_BASENAME}.gro или ${PEPTIDE_BASENAME}.top в ${PEPTIDE_DIR}. Пропускаем."
-        continue
-    fi
+        # Шаг 3.1: Создание бокса
+        echo "--> Шаг 3.1: Создание бокса для ${peptide_base}"
+        gmx_mpi editconf -f "${PEPTIDE_GRO}" -o "${peptide_dir}/${peptide_base}_box.gro" -c -d 1.0 -bt cubic
+        if [ $? -ne 0 ]; then echo "ОШИБКА на этапе editconf для ${peptide_base}"; continue; fi
 
-    # Определяем имена промежуточных и выходных файлов внутри директории пептида
-    PEPTIDE_BOX_GRO="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}_box.gro"
-    ANNEAL_MDP="${PEPTIDE_DIR}/anneal_${PEPTIDE_BASENAME}.mdp" # Уникальное имя MDP
-    ANNEAL_TPR="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}_anneal.tpr"
-    ANNEAL_DEFFNM="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}_anneal" # Базовое имя для mdrun
-    ANNEAL_XTC="${ANNEAL_DEFFNM}.xtc" # Имя файла траектории
-    OPTIMIZED_GRO="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}_optimized.gro" # Финальный выход
-
-    # --- Шаг 3.1: Создание бокса ---
-    echo "--> 3.1: Создание бокса ${PEPTIDE_BOX_GRO}"
-    gmx_mpi editconf -f "${PEPTIDE_GRO_INPUT}" -o "${PEPTIDE_BOX_GRO}" -c -d 1.0 -bt cubic
-    if [ $? -ne 0 ] || [ ! -f "${PEPTIDE_BOX_GRO}" ]; then
-        echo "ОШИБКА на этапе editconf для ${PEPTIDE_BASENAME}."
-        continue
-    fi
-
-    # --- Шаг 3.2: Создание MDP файла ---
-    echo "--> 3.2: Создание ${ANNEAL_MDP}"
-    cat << EOF > "${ANNEAL_MDP}"
-; --- Параметры отжига для ${PEPTIDE_BASENAME} (NPT) ---
-title           = ${PEPTIDE_BASENAME} Annealing
+        # Шаг 3.2: Создание anneal.mdp
+        echo "--> Шаг 3.2: Создание anneal.mdp для ${peptide_base}"
+        cat << EOF > "${peptide_dir}/anneal.mdp"
+; --- Параметры для отжига пептида (Тест ${ANNEAL_TOTAL_TIME} ps) ---
 integrator      = md
-nsteps          = $(($ANNEAL_TIME_PS * 1000))
+nsteps          = ${NSTEPS} ; <--- Используем переменную для числа шагов
 dt              = 0.001
-nstxout-compressed = 5000
-nstlog          = 5000
-nstenergy       = 5000
+nstxout-compressed  = 1000 ; Сохраняем чаще для короткого теста (каждые 1 ps)
+nstlog          = 1000
+nstenergy       = 1000
+xtc-precision   = 1000  ; <-- Добавлено для явного создания XTC
 constraints     = h-bonds
 constraint_algorithm = LINCS
 cutoff-scheme   = Verlet
@@ -75,69 +74,69 @@ coulombtype     = PME
 pme_order       = 4
 fourierspacing  = 0.16
 tcoupl          = V-rescale
-tc-grps         = Protein       ; Ожидаем группу Protein
+tc-grps         = System ; Используем System, т.к. только пептид
 tau_t           = 0.1
 ref_t           = $ANNEAL_TEMP_HIGH
-pcoupl          = Berendsen
+pcoupl          = Berendsen ; Используем Berendsen, как было в anneal.mdp ранее
 pcoupltype      = isotropic
 tau_p           = 2.0
 ref_p           = 1.0
 compressibility = 4.5e-5
 annealing       = single
 annealing-npoints = 3
-annealing-time  = 0 $ANNEAL_TIME_RAMP_PS $ANNEAL_TIME_PS
-annealing-temp  = $ANNEAL_TEMP_LOW $ANNEAL_TEMP_HIGH $ANNEAL_TEMP_HIGH
+annealing-time  = 0 ${ANNEAL_RAMP_TIME} ${ANNEAL_TOTAL_TIME} ; Время отжига
+annealing-temp  = $ANNEAL_TEMP_LOW $ANNEAL_TEMP_HIGH $ANNEAL_TEMP_HIGH ; Температуры отжига
 gen_vel         = yes
 gen_temp        = $ANNEAL_TEMP_LOW
 gen_seed        = -1
 pbc             = xyz
 EOF
 
-    # --- Шаг 3.3: Запуск grompp ---
-    echo "--> 3.3: Запуск grompp для ${PEPTIDE_BASENAME}"
-    gmx_mpi grompp -f "${ANNEAL_MDP}" -c "${PEPTIDE_BOX_GRO}" -p "${PEPTIDE_TOP_INPUT}" -o "${ANNEAL_TPR}" -maxwarn 2
-    if [ $? -ne 0 ] || [ ! -f "${ANNEAL_TPR}" ]; then
-        echo "ОШИБКА на этапе grompp для ${PEPTIDE_BASENAME}."
-        continue
+        # Шаг 3.3: Запуск grompp
+        echo "--> Шаг 3.3: Запуск grompp для отжига ${peptide_base}"
+        gmx_mpi grompp -f "${peptide_dir}/anneal.mdp" -c "${peptide_dir}/${peptide_base}_box.gro" -p "${PEPTIDE_TOP}" -o "${peptide_dir}/${peptide_base}_anneal.tpr" -maxwarn 2
+        if [ $? -ne 0 ]; then echo "ОШИБКА на этапе grompp для ${peptide_base}"; continue; fi
+
+        # Шаг 3.4: Запуск mdrun (без явного указания GPU/CPU, как в рабочем варианте)
+        echo "--> Шаг 3.4: Запуск mdrun для отжига (${ANNEAL_TOTAL_TIME} ps) ${peptide_base}"
+        gmx_mpi mdrun -deffnm "${peptide_dir}/${peptide_base}_anneal" -v
+        if [ $? -ne 0 ]; then echo "ОШИБКА на этапе mdrun для ${peptide_base}"; continue; fi
+
+        # Проверка, дошла ли симуляция до конца
+        LAST_STEP=$(grep "Statistics over " "${peptide_dir}/${peptide_base}_anneal.log" | tail -n 1 | awk '{print $4}')
+        if [ "${LAST_STEP}" != "${NSTEPS}" ]; then
+             echo "ОШИБКА: Отжиг завершился на шаге ${LAST_STEP}, а не ${NSTEPS}."
+             continue
+        fi
+
+        # Шаг 3.5: Извлечение последнего кадра
+        echo "--> Шаг 3.5: Извлечение финального кадра (${DUMP_TIME} ps) отжига для ${peptide_base}"
+        # Пытаемся извлечь из .xtc
+        echo "0" | gmx_mpi trjconv -s "${peptide_dir}/${peptide_base}_anneal.tpr" -f "${peptide_dir}/${peptide_base}_anneal.xtc" -o "${OPTIMIZED_GRO}" -dump ${DUMP_TIME} &> /dev/null # Скрываем вывод trjconv
+        # Проверяем, создался ли файл и не пустой ли он
+        if [ ! -s "${OPTIMIZED_GRO}" ]; then
+            echo "Предупреждение: Не удалось извлечь из .xtc или файл пуст. Попытка извлечь из .trr..."
+            if [ -f "${peptide_dir}/${peptide_base}_anneal.trr" ]; then
+                echo "0" | gmx_mpi trjconv -s "${peptide_dir}/${peptide_base}_anneal.tpr" -f "${peptide_dir}/${peptide_base}_anneal.trr" -o "${OPTIMIZED_GRO}" -dump ${DUMP_TIME} &> /dev/null
+                if [ ! -s "${OPTIMIZED_GRO}" ]; then
+                    echo "ОШИБКА: Не удалось извлечь кадр и из .trr."; continue;
+                fi
+                 echo "Успешно извлечено из .trr."
+            else
+                echo "ОШИБКА: Файл .trr не найден. Не удалось извлечь финальный кадр."; continue;
+            fi
+        else
+             echo "Успешно извлечено из .xtc."
+        fi
+
+
+        # Шаг 3.6: Очистка (опционально, можно закомментировать)
+        # echo "--> Шаг 3.6: Очистка промежуточных файлов для ${peptide_base}"
+        # rm -f "${peptide_dir}/${peptide_base}_box.gro" "${peptide_dir}/anneal.mdp" "${peptide_dir}/${peptide_base}_anneal.log" "${peptide_dir}/${peptide_base}_anneal.xtc" "${peptide_dir}/${peptide_base}_anneal.trr" "${peptide_dir}/${peptide_base}_anneal.edr" "${peptide_dir}/${peptide_base}_anneal.tpr" "${peptide_dir}/${peptide_base}_anneal.gro" "${peptide_dir}/${peptide_base}_anneal.cpt" "${peptide_dir}/#*" "${peptide_dir}/*~"
+
+        echo "--- ШАГ 3 ЗАВЕРШЕН: Оптимизация пептида ${peptide_base} завершена (Тест ${ANNEAL_TOTAL_TIME} ps) ---"
     fi
-
-    # --- Шаг 3.4: Запуск mdrun ---
-    echo "--> 3.4: Запуск mdrun для отжига ${PEPTIDE_BASENAME} (${ANNEAL_TIME_PS} ps)..."
-    # Запускаем mdrun, используя -deffnm с полным путем
-    gmx_mpi mdrun -deffnm "${ANNEAL_DEFFNM}" -v
-    if [ $? -ne 0 ] || [ ! -f "${ANNEAL_XTC}" ]; then
-        echo "ОШИБКА на этапе mdrun для ${PEPTIDE_BASENAME}."
-        continue
-    fi
-
-    # --- Шаг 3.5: Извлечение кадра ---
-    echo "--> 3.5: Извлечение финального кадра для ${PEPTIDE_BASENAME}"
-    # Получаем номер группы Protein (или запасной вариант)
-    NDX_OUTPUT=$(echo "q" | gmx_mpi make_ndx -f "${PEPTIDE_BOX_GRO}" -o junk_index.ndx 2>&1)
-    rm -f junk_index.ndx
-    PROTEIN_GROUP_NUM=$(echo "${NDX_OUTPUT}" | grep "Protein" | head -n 1 | awk '{print $1}')
-    if [[ -z "${PROTEIN_GROUP_NUM}" || ! "${PROTEIN_GROUP_NUM}" =~ ^[0-9]+$ ]]; then
-        echo "ВНИМАНИЕ: Не удалось найти группу 'Protein' для ${PEPTIDE_BASENAME}. Используем группу 1."
-        PROTEIN_GROUP_NUM=1
-    fi
-    echo "Для trjconv ${PEPTIDE_BASENAME} будет выбрана группа: ${PROTEIN_GROUP_NUM}"
-
-    # Запускаем trjconv
-    echo "${PROTEIN_GROUP_NUM}" | gmx_mpi trjconv -s "${ANNEAL_TPR}" -f "${ANNEAL_XTC}" -o "${OPTIMIZED_GRO}" -dump $ANNEAL_TIME_PS
-    if [ $? -ne 0 ] || [ ! -f "${OPTIMIZED_GRO}" ]; then
-        echo "ОШИБКА на этапе trjconv для ${PEPTIDE_BASENAME} или файл ${OPTIMIZED_GRO} не создан."
-        continue
-    fi
-    echo "--> Оптимизированные координаты сохранены в: ${OPTIMIZED_GRO}"
-
-    # --- Шаг 3.6: Очистка ---
-    echo "--> 3.6: Очистка промежуточных файлов для ${PEPTIDE_BASENAME}..."
-    rm -f "${PEPTIDE_BOX_GRO}" "${ANNEAL_MDP}" "${ANNEAL_DEFFNM}.log" "${ANNEAL_DEFFNM}.xtc" "${ANNEAL_DEFFNM}.edr" "${ANNEAL_DEFFNM}.tpr" "${ANNEAL_DEFFNM}.gro" "${ANNEAL_DEFFNM}.cpt" "${PEPTIDE_DIR}/mdout.mdp" "${PEPTIDE_DIR}/\#*#"
-    echo "Очистка для ${PEPTIDE_BASENAME} завершена."
-
-    echo "--- Обработка пептида ${PEPTIDE_BASENAME} УСПЕШНО ЗАВЕРШЕНА ---"
-
 done
 
 echo ""
-echo "--- ОТЖИГ ВСЕХ ПЕПТИДОВ завершен ---"
+echo "=== ОПТИМИЗАЦИЯ ВСЕХ ПЕПТИДОВ ЗАВЕРШЕНА (Тест ${ANNEAL_TOTAL_TIME} ps) ==="

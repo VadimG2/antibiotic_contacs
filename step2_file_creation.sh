@@ -1,58 +1,83 @@
 #!/bin/bash
 
-# --- Входные данные ---
-PEPTIDE_PDB="pept1.pdb"
-PEPTIDE_GRO="pept1.gro"
-PEPTIDE_TOP="pept1.top"
-PEPTIDE_POSRES_OLD="posre.itp"          # Имя файла, создаваемого pdb2gmx
-PEPTIDE_POSRES_NEW="posre_protein.itp" # Новое имя файла ограничений
+# --- Пути к директориям ---
+INPUT_PROTEIN_DIR="input/protein"
+OUTPUT_DIR="output"
 
 # --- Параметры pdb2gmx ---
 FORCEFIELD="amber14sb"
 WATERMODEL="tip3p"
 
-echo "--- ШАГ 2: Подготовка топологии пептида ---"
+# Создаем основную выходную директорию, если ее нет
+mkdir -p "${OUTPUT_DIR}"
 
-# 2.1: Генерация топологии GROMACS
-echo "--> 2.1: Запуск pdb2gmx для ${PEPTIDE_PDB}..."
-gmx_mpi pdb2gmx -f ${PEPTIDE_PDB} -o ${PEPTIDE_GRO} -p ${PEPTIDE_TOP} -ignh -ff ${FORCEFIELD} -water ${WATERMODEL}
-# Проверка успешности выполнения pdb2gmx
-if [ $? -ne 0 ] || [ ! -f "${PEPTIDE_TOP}" ] || [ ! -f "${PEPTIDE_GRO}" ] || [ ! -f "${PEPTIDE_POSRES_OLD}" ]; then
-    echo "ОШИБКА: gmx pdb2gmx не завершился успешно или не создал необходимые файлы."
-    exit 1
-fi
-echo "--> Топология (${PEPTIDE_TOP}), координаты (${PEPTIDE_GRO}) и ограничения (${PEPTIDE_POSRES_OLD}) успешно сгенерированы."
+echo "=== НАЧАЛО ОБРАБОТКИ ВСЕХ КОМБИНАЦИЙ ПЕПТИДОВ И ЛИГАНДОВ ==="
 
-# 2.2: Переименование файла ограничений
-echo "--> 2.2: Переименование ${PEPTIDE_POSRES_OLD} -> ${PEPTIDE_POSRES_NEW}"
-if [ -f "${PEPTIDE_POSRES_OLD}" ]; then
-    mv ${PEPTIDE_POSRES_OLD} ${PEPTIDE_POSRES_NEW}
-    if [ $? -ne 0 ]; then
-        echo "ОШИБКА: Не удалось переименовать файл ограничений."
+# Итерация по всем файлам .pdb в input/protein
+for protein_pdb in "${INPUT_PROTEIN_DIR}"/*.pdb; do
+    # Проверяем, есть ли файлы в директории
+    if [ ! -e "${protein_pdb}" ]; then
+        echo "ОШИБКА: Не найдено .pdb файлов в ${INPUT_PROTEIN_DIR}"
         exit 1
     fi
-else
-    echo "ВНИМАНИЕ: Файл ${PEPTIDE_POSRES_OLD} не найден. Возможно, pdb2gmx не создал его."
-    # Можно добавить exit 1, если этот файл обязателен
-fi
 
-# 2.3: Замена include в файле топологии
-echo "--> 2.3: Обновление #include в файле ${PEPTIDE_TOP}..."
-# Используем sed для поиска и замены строки.
-# s/шаблон/замена/ - команда замены
-# \#include \"posre\.itp\" - искомый шаблон. Кавычки и точка экранированы '\'.
-# \#include \"posre_protein\.itp\" - строка для замены.
-# g - флаг глобальной замены (хотя здесь ожидается одно вхождение)
-sed -i.bak 's/#include "posre\.itp"/#include "posre_protein.itp"/g' ${PEPTIDE_TOP}
+    # Извлекаем имя файла без пути и расширения
+    protein_base=$(basename "${protein_pdb}" .pdb)
+    protein_output_dir="${OUTPUT_DIR}/${protein_base}"
+    mkdir -p "${protein_output_dir}"
 
-# Проверка, произошла ли замена (сравнением с бэкапом)
-if cmp -s "${PEPTIDE_TOP}" "${PEPTIDE_TOP}.bak"; then
-    echo "ВНИМАНИЕ: Строка '#include \"posre.itp\"' не найдена или не заменена в ${PEPTIDE_TOP}."
-    # Здесь можно решить, критична ли ошибка. Если PosRes нужен, то exit 1.
-    # rm "${PEPTIDE_TOP}.bak" # Удалить бэкап, если замена не нужна/не прошла
-else
-    echo "--> #include успешно обновлен на '${PEPTIDE_POSRES_NEW}'."
-    rm "${PEPTIDE_TOP}.bak" # Удаляем бэкап, так как замена прошла успешно
-fi
+    # --- Входные и выходные файлы для пептида ---
+    PEPTIDE_PDB="${protein_pdb}"
+    PEPTIDE_GRO="${protein_output_dir}/${protein_base}.gro"
+    PEPTIDE_TOP="${protein_output_dir}/${protein_base}.top"
+    PEPTIDE_POSRES_OLD="${protein_output_dir}/posre.itp"          # Куда мы переместим posre.itp
+    PEPTIDE_POSRES_NEW="${protein_output_dir}/posre_protein.itp"  # Новое имя файла ограничений
 
-echo "--- ШАГ 2 ЗАВЕРШЕН: Топология пептида подготовлена ---"
+    echo "--- ШАГ 2: Подготовка топологии пептида ${protein_base} ---"
+
+    # 2.1: Генерация топологии GROMACS
+    echo "--> 2.1: Запуск pdb2gmx для ${protein_base}..."
+    gmx_mpi pdb2gmx -f "${PEPTIDE_PDB}" -o "${PEPTIDE_GRO}" -p "${PEPTIDE_TOP}" -ignh -ff "${FORCEFIELD}" -water "${WATERMODEL}"
+    
+    # Перемещаем posre.itp из текущей директории, если он там создался
+    if [ -f "posre.itp" ]; then
+        mv "posre.itp" "${PEPTIDE_POSRES_OLD}"
+        if [ $? -ne 0 ]; then
+            echo "ОШИБКА: Не удалось переместить posre.itp в ${PEPTIDE_POSRES_OLD}"
+            continue
+        fi
+    fi
+
+    # Проверка успешности выполнения pdb2gmx
+    if [ $? -ne 0 ] || [ ! -f "${PEPTIDE_TOP}" ] || [ ! -f "${PEPTIDE_GRO}" ] || [ ! -f "${PEPTIDE_POSRES_OLD}" ]; then
+        echo "ОШИБКА: gmx pdb2gmx не завершился успешно или не создал необходимые файлы для ${protein_base}."
+        continue
+    fi
+    echo "--> Топология (${PEPTIDE_TOP}), координаты (${PEPTIDE_GRO}) и ограничения (${PEPTIDE_POSRES_OLD}) успешно сгенерированы."
+
+    # 2.2: Переименование файла ограничений
+    echo "--> 2.2: Переименование ${PEPTIDE_POSRES_OLD} -> ${PEPTIDE_POSRES_NEW}"
+    if [ -f "${PEPTIDE_POSRES_OLD}" ]; then
+        mv "${PEPTIDE_POSRES_OLD}" "${PEPTIDE_POSRES_NEW}"
+        if [ $? -ne 0 ]; then
+            echo "ОШИБКА: Не удалось переименовать файл ограничений для ${protein_base}."
+            continue
+        fi
+    else
+        echo "ВНИМАНИЕ: Файл ${PEPTIDE_POSRES_OLD} не найден для ${protein_base}. Возможно, pdb2gmx не создал его."
+    fi
+
+    # 2.3: Замена include в файле топологии
+    echo "--> 2.3: Обновление #include в файле ${PEPTIDE_TOP}..."
+    sed -i.bak 's/#include "posre\.itp"/#include "posre_protein.itp"/g' "${PEPTIDE_TOP}"
+    if cmp -s "${PEPTIDE_TOP}" "${PEPTIDE_TOP}.bak"; then
+        echo "ВНИМАНИЕ: Строка '#include \"posre.itp\"' не найдена или не заменена в ${PEPTIDE_TOP}."
+    else
+        echo "--> #include успешно обновлен на 'posre_protein.itp' для ${protein_base}."
+        rm "${PEPTIDE_TOP}.bak"
+    fi
+
+    echo "--- ШАГ 2 ЗАВЕРШЕН: Топология пептида ${protein_base} подготовлена ---"
+done
+
+echo "=== ОБРАБОТКА ШАГА 2 ДЛЯ ВСЕХ ПЕПТИДОВ ЗАВЕРШЕНА ==="

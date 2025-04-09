@@ -46,7 +46,7 @@ for PEPTIDE_PDB_PATH in "${INPUT_PROTEIN_DIR}"/*.@(pdb); do
         PEPTIDE_GRO="${PEPTIDE_OUTPUT_DIR}/${PEPTIDE_BASENAME}.gro"
         PEPTIDE_TOP="${PEPTIDE_OUTPUT_DIR}/${PEPTIDE_BASENAME}.top"
         PEPTIDE_POSRES_OLD="${PEPTIDE_OUTPUT_DIR}/posre.itp" # pdb2gmx создаст его здесь
-        PEPTIDE_POSRES_NEW="${PEPTIDE_OUTPUT_DIR}/posre_${PEPTIDE_BASENAME}.itp"
+        PEPTIDE_POSRES_NEW="${PEPTIDE_OUTPUT_DIR}/posre_protein.itp"
 
         # --- Шаг 2.1: Генерация топологии GROMACS ---
         echo "--> 2.1: Запуск pdb2gmx для ${PEPTIDE_PDB_PATH}..."

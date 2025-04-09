@@ -1,175 +1,166 @@
 #!/bin/bash
 
-# --- Директории ---
-OUTPUT_BASE_DIR="output"
-SIMULATIONS_DIR="simulations"
+# --- Пути к директориям ---
+INPUT_DIR="output"  # Папка, где лежат папки с подготовленными пептидами (pept1, pept2...)
+OUTPUT_DIR="output" # Сюда же будем класть optimized.gro
 
-# --- Параметры сборки ---
-BOX_DISTANCE=2.0
-SALT_CONCENTRATION=0.15
-SOLVENT_MODEL="spc216.gro"
-FORCEFIELD_DIR="amber14sb.ff"
+echo "=== НАЧАЛО ОПТИМИЗАЦИИ ГЕОМЕТРИИ ПЕПТИДОВ (ОТЖИГ - ТЕСТ 5ps) ==="
 
-echo "--- НАЧАЛО: Сборка всех систем Пептид-Лиганд ---"
-mkdir -p "${SIMULATIONS_DIR}" || { echo "ОШИБКА: Не удалось создать ${SIMULATIONS_DIR}"; exit 1; }
+# --- Параметры ---
+# --- ДЛЯ ТЕСТА ---
+TEST_STEPS=5000           # 5000 шагов
+TEST_TIME_PS=5             # Соответствует 5 ps при dt=0.001
+TEST_DUMP_TIME=5           # Время для извлечения кадра
+# --- Финальные параметры (закомментированы) ---
+# ANNEAL_STEPS=500000        # 500 ps
+# ANNEAL_TIME_PS=500
+# ANNEAL_DUMP_TIME=500
+# --- Общие параметры отжига ---
+ANNEAL_TEMP_LOW=5
+ANNEAL_TEMP_HIGH=400
+ANNEAL_TIME_RAMP_PS=2.5 # Для 5ps теста делаем нагрев за половину времени
 
-# --- Поиск директорий пептидов и лигандов ---
-peptide_dirs=()
-ligand_dirs=()
-for d in "${OUTPUT_BASE_DIR}"/*/; do
-    if [ -n "$(find "${d}" -maxdepth 1 -name '*_optimized.gro' -print -quit)" ]; then
-        peptide_dirs+=("${d%/}")
-    fi
-done
-for d in "${OUTPUT_BASE_DIR}"/*/; do
-    if [ -n "$(find "${d}" -maxdepth 1 -name '*_GMX.gro' -print -quit)" ]; then
-        ITP_FILE=$(find "${d}" -maxdepth 1 -name '*_bcc_manual.itp' -print -quit)
-        POSRES_FILE=$(find "${d}" -maxdepth 1 -name 'posre_*.itp' -print -quit)
-        if [ -n "${ITP_FILE}" ] && [ -n "${POSRES_FILE}" ]; then
-            ligand_dirs+=("${d%/}")
-        else
-            echo "ВНИМАНИЕ: В ${d} отсутствуют .itp или posre файлы. Пропускаем."
-        fi
-    fi
-done
-if [ ${#peptide_dirs[@]} -eq 0 ]; then echo "ОШИБКА: Не найдено пептидов"; exit 1; fi
-if [ ${#ligand_dirs[@]} -eq 0 ]; then echo "ОШИБКА: Не найдено лигандов"; exit 1; fi
-echo "Найдено пептидов: ${#peptide_dirs[@]}, Лигандов: ${#ligand_dirs[@]}"
+# --- Определяем параметры для текущего запуска (тест или полный) ---
+NSTEPS=${TEST_STEPS}
+DUMP_TIME=${TEST_DUMP_TIME}
+ANNEAL_TOTAL_TIME=${TEST_TIME_PS} # Общее время для mdp (в ps)
+# ANNEAL_TOTAL_TIME=${ANNEAL_TIME_PS} # Для полного запуска
+ANNEAL_RAMP_TIME=$(echo "$ANNEAL_TOTAL_TIME / 2" | bc -l) # Время нагрева - половина
 
-# --- Основной цикл ---
-for PEPTIDE_DIR in "${peptide_dirs[@]}"; do
-    PEPTIDE_BASENAME=$(basename "${PEPTIDE_DIR}")
-    PEPTIDE_OPT_GRO="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}_optimized.gro"
-    PEPTIDE_TOP_SOURCE="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}.top"
-    PEPTIDE_POSRES_SOURCE=$(find "${PEPTIDE_DIR}" -maxdepth 1 -name 'posre_*.itp' -print -quit)
-    PEPTIDE_ITP_SOURCE="${PEPTIDE_DIR}/${PEPTIDE_BASENAME}.itp"
+# Итерация по всем папкам пептидов в output/
+for peptide_dir in "${INPUT_DIR}"/*; do
+    if [ -d "${peptide_dir}" ]; then
+        peptide_base=$(basename "${peptide_dir}")
+        PEPTIDE_GRO="${peptide_dir}/${peptide_base}.gro"  # Входной файл от шага 2
+        PEPTIDE_TOP="${peptide_dir}/${peptide_base}.top"  # Входной файл от шага 2
+        OPTIMIZED_GRO="${peptide_dir}/${peptide_base}_optimized.gro"  # Выходной файл
 
-    if [ ! -f "${PEPTIDE_ITP_SOURCE}" ]; then
-        echo "--> Создание ${PEPTIDE_ITP_SOURCE} из ${PEPTIDE_TOP_SOURCE}"
-        awk '/^\[ moleculetype \]/,/^\[ system \]/' "${PEPTIDE_TOP_SOURCE}" | sed '$d' > "${PEPTIDE_ITP_SOURCE}"
-        if [ $? -ne 0 ] || [ ! -s "${PEPTIDE_ITP_SOURCE}" ]; then
-            echo "ОШИБКА извлечения moleculetype пептида из ${PEPTIDE_TOP_SOURCE}"
+        # Проверка наличия входных файлов
+        if [ ! -f "${PEPTIDE_GRO}" ] || [ ! -f "${PEPTIDE_TOP}" ]; then
+            echo "Пропуск: ${peptide_dir} не содержит файлов пептида (${peptide_base}.gro или ${peptide_base}.top)"
             continue
         fi
-    fi
-    PEPTIDE_MOL_NAME=$(awk '/^\[ moleculetype \]/{getline; print $1; exit}' "${PEPTIDE_ITP_SOURCE}" || echo "Protein_${PEPTIDE_BASENAME}")
-
-    if [ ! -f "${PEPTIDE_OPT_GRO}" ] || [ ! -f "${PEPTIDE_ITP_SOURCE}" ] || [ ! -f "${PEPTIDE_POSRES_SOURCE}" ]; then
-        echo "ВНИМАНИЕ: Отсутствуют .gro, .itp или posre файлы для пептида ${PEPTIDE_BASENAME}. Пропускаем."
-        continue
-    fi
-
-    for LIGAND_DIR in "${ligand_dirs[@]}"; do
-        LIGAND_BASENAME=$(basename "${LIGAND_DIR}")
-        LIGAND_GRO_SOURCE=$(find "${LIGAND_DIR}" -maxdepth 1 -name '*_GMX.gro' -print -quit)
-        LIGAND_ITP_SOURCE=$(find "${LIGAND_DIR}" -maxdepth 1 -name '*_bcc_manual.itp' -print -quit)
-        LIGAND_POSRES_SOURCE=$(find "${LIGAND_DIR}" -maxdepth 1 -name 'posre_*.itp' -print -quit)
-        LIGAND_MOL_NAME=$(awk '/^\[ moleculetype \]/{getline; print $1; exit}' "${LIGAND_ITP_SOURCE}" || echo "${LIGAND_BASENAME}")
-
-        if [ ! -f "${LIGAND_GRO_SOURCE}" ] || [ ! -f "${LIGAND_ITP_SOURCE}" ] || [ ! -f "${LIGAND_POSRES_SOURCE}" ]; then
-            echo "ВНИМАНИЕ: Отсутствуют файлы для лиганда ${LIGAND_BASENAME}. Пропускаем комбинацию."
-            continue
-        fi
-
-        SYSTEM_NAME="${PEPTIDE_BASENAME}_${LIGAND_BASENAME}"
-        SIMULATION_OUTPUT_DIR="${SIMULATIONS_DIR}/${SYSTEM_NAME}"
 
         echo ""
-        echo "--- Сборка системы: ${SYSTEM_NAME} в ${SIMULATION_OUTPUT_DIR} ---"
-        mkdir -p "${SIMULATION_OUTPUT_DIR}" || { echo "ОШИБКА: Не удалось создать ${SIMULATION_OUTPUT_DIR}"; continue; }
+        echo "--- ШАГ 3: Оптимизация геометрии пептида ${peptide_base} (Отжиг - Тест ${ANNEAL_TOTAL_TIME} ps) ---"
 
-        FINAL_TOPOLOGY="${SIMULATION_OUTPUT_DIR}/${SYSTEM_NAME}.top"
-        FINAL_COORDS="${SIMULATION_OUTPUT_DIR}/${SYSTEM_NAME}_solv_ions.gro"
-        FINAL_INDEX="${SIMULATION_OUTPUT_DIR}/index.ndx"
-        PEPTIDE_ITP_LOCAL="${SIMULATION_OUTPUT_DIR}/$(basename ${PEPTIDE_ITP_SOURCE})"
-        PEPTIDE_POSRES_LOCAL="${SIMULATION_OUTPUT_DIR}/$(basename ${PEPTIDE_POSRES_SOURCE})"
-        LIGAND_ITP_LOCAL="${SIMULATION_OUTPUT_DIR}/$(basename ${LIGAND_ITP_SOURCE})"
-        LIGAND_POSRES_LOCAL="${SIMULATION_OUTPUT_DIR}/$(basename ${LIGAND_POSRES_SOURCE})"
-        LIGAND_GRO_LOCAL="${SIMULATION_OUTPUT_DIR}/$(basename ${LIGAND_GRO_SOURCE})"
-        PEPTIDE_CENTER_GRO="${SIMULATION_OUTPUT_DIR}/${PEPTIDE_BASENAME}_center.gro"
-        COMBINED_GRO="${SIMULATION_OUTPUT_DIR}/${SYSTEM_NAME}_combined.gro"
-        BOX_GRO="${SIMULATION_OUTPUT_DIR}/${SYSTEM_NAME}_box.gro"
-        SOLV_GRO="${SIMULATION_OUTPUT_DIR}/${SYSTEM_NAME}_solv.gro"
-        IONS_TPR="${SIMULATION_OUTPUT_DIR}/${SYSTEM_NAME}_ions.tpr"
-        IONS_MDP="${SIMULATION_OUTPUT_DIR}/ions.mdp"
+        # Удаляем старые файлы отжига перед запуском
+        rm -f "${peptide_dir}/${peptide_base}_box.gro" "${peptide_dir}/anneal.mdp" "${peptide_dir}/${peptide_base}_anneal."* "${peptide_dir}/mdout.mdp" "${OPTIMIZED_GRO}"
 
-        # --- 5.A: Копирование файлов ---
-        echo "--> 5.A: Копирование файлов в ${SIMULATION_OUTPUT_DIR}"
-        cp "${PEPTIDE_ITP_SOURCE}" "${PEPTIDE_ITP_LOCAL}" || { echo "ОШИБКА копирования ${PEPTIDE_ITP_SOURCE}"; continue; }
-        cp "${PEPTIDE_POSRES_SOURCE}" "${PEPTIDE_POSRES_LOCAL}" || { echo "ОШИБКА копирования ${PEPTIDE_POSRES_SOURCE}"; continue; }
-        cp "${LIGAND_ITP_SOURCE}" "${LIGAND_ITP_LOCAL}" || { echo "ОШИБКА копирования ${LIGAND_ITP_SOURCE}"; continue; }
-        cp "${LIGAND_POSRES_SOURCE}" "${LIGAND_POSRES_LOCAL}" || { echo "ОШИБКА копирования ${LIGAND_POSRES_SOURCE}"; continue; }
-        cp "${LIGAND_GRO_SOURCE}" "${LIGAND_GRO_LOCAL}" || { echo "ОШИБКА копирования ${LIGAND_GRO_SOURCE}"; continue; }
+        # Шаг 3.1: Создание бокса
+        echo "--> Шаг 3.1: Создание бокса для ${peptide_base}"
+        gmx_mpi editconf -f "${PEPTIDE_GRO}" -o "${peptide_dir}/${peptide_base}_box.gro" -c -d 1.0 -bt cubic
+        if [ $? -ne 0 ]; then echo "ОШИБКА на этапе editconf для ${peptide_base}"; continue; fi
 
-        # --- 5.B: Создание топологии ---
-        echo "--> 5.B: Создание ${FINAL_TOPOLOGY}"
-        cat << EOF > "${FINAL_TOPOLOGY}"
-; Основной файл топологии для системы ${SYSTEM_NAME}
-
-; Включаем основное силовое поле (AMBER14SB)
-#include "${FORCEFIELD_DIR}/forcefield.itp"
-
-; Включаем топологию лиганда
-#include "./$(basename ${LIGAND_ITP_LOCAL})"
-
-; Включаем топологию пептида
-#include "./$(basename ${PEPTIDE_ITP_LOCAL})"
-
-; Включаем модель воды TIP3P
-#include "${FORCEFIELD_DIR}/tip3p.itp"
-
-[ system ]
-${SYSTEM_NAME} in water
-
-[ molecules ]
-; Compound        nmols
-${PEPTIDE_MOL_NAME}     1
-${LIGAND_MOL_NAME}      1
-; Вода и ионы будут добавлены автоматически
+        # Шаг 3.2: Создание anneal.mdp
+        echo "--> Шаг 3.2: Создание anneal.mdp для ${peptide_base}"
+        cat << EOF > "${peptide_dir}/anneal.mdp"
+; --- Параметры для отжига пептида (Тест ${ANNEAL_TOTAL_TIME} ps) ---
+integrator      = md
+nsteps          = ${NSTEPS} ; <--- Используем переменную для числа шагов
+dt              = 0.001
+nstxout-compressed  = 1000 ; Сохраняем чаще для короткого теста (каждые 1 ps)
+nstlog          = 1000
+nstenergy       = 1000
+xtc-precision   = 1000  ; <-- Добавлено для явного создания XTC
+constraints     = h-bonds
+constraint_algorithm = LINCS
+cutoff-scheme   = Verlet
+nstlist         = 10
+rcoulomb        = 1.0
+rvdw            = 1.0
+DispCorr        = EnerPres
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.16
+tcoupl          = V-rescale
+tc-grps         = System ; Используем System, т.к. только пептид
+tau_t           = 0.1
+ref_t           = $ANNEAL_TEMP_HIGH
+pcoupl          = Berendsen ; Используем Berendsen, как было в anneal.mdp ранее
+pcoupltype      = isotropic
+tau_p           = 2.0
+ref_p           = 1.0
+compressibility = 4.5e-5
+annealing       = single
+annealing-npoints = 3
+annealing-time  = 0 ${ANNEAL_RAMP_TIME} ${ANNEAL_TOTAL_TIME} ; Время отжига
+annealing-temp  = $ANNEAL_TEMP_LOW $ANNEAL_TEMP_HIGH $ANNEAL_TEMP_HIGH ; Температуры отжига
+gen_vel         = yes
+gen_temp        = $ANNEAL_TEMP_LOW
+gen_seed        = -1
+pbc             = xyz
 EOF
-        if [ $? -ne 0 ] || [ ! -s "${FINAL_TOPOLOGY}" ]; then echo "ОШИБКА создания ${FINAL_TOPOLOGY}"; continue; fi
 
-        # --- 5.C: Сборка координат ---
-        echo "--> 5.C: Сборка координат системы..."
-        gmx_mpi editconf -f "${PEPTIDE_OPT_GRO}" -o "${PEPTIDE_CENTER_GRO}" -c -box 6.0 6.0 6.0 || { echo "ОШИБКА editconf"; continue; }
-        gmx_mpi insert-molecules -f "${PEPTIDE_CENTER_GRO}" -ci "${LIGAND_GRO_LOCAL}" -nmol 1 -o "${COMBINED_GRO}" -try 50 -radius 0.2 -dr 1.0 1.0 1.0 || { echo "ОШИБКА insert-molecules"; continue; }
-        gmx_mpi editconf -f "${COMBINED_GRO}" -o "${BOX_GRO}" -c -d ${BOX_DISTANCE} -bt cubic || { echo "ОШИБКА editconf"; continue; }
+        # Шаг 3.3: Запуск grompp
+        echo "--> Шаг 3.3: Запуск grompp для отжига ${peptide_base}"
+        gmx_mpi grompp -f "${peptide_dir}/anneal.mdp" -c "${peptide_dir}/${peptide_base}_box.gro" -p "${PEPTIDE_TOP}" -o "${peptide_dir}/${peptide_base}_anneal.tpr" -maxwarn 2
+        if [ $? -ne 0 ]; then echo "ОШИБКА на этапе grompp для ${peptide_base}"; continue; fi
 
-        # --- 5.D: Сольватация и ионизация ---
-        echo "--> 5.D: Сольватация и ионизация..."
-        cd "${SIMULATION_OUTPUT_DIR}" || { echo "ОШИБКА: Не удалось перейти в ${SIMULATION_OUTPUT_DIR}"; continue; }
+# Шаг 3.4: Запуск mdrun (без явного указания GPU/CPU, как в рабочем варианте)
+        echo "--> Шаг 3.4: Запуск mdrun для отжига (${ANNEAL_TOTAL_TIME} ps) ${peptide_base}"
+        # Запускаем mdrun и сохраняем лог в переменную для последующей проверки
+        MD_LOG=$(gmx_mpi mdrun -deffnm "${peptide_dir}/${peptide_base}_anneal" -v 2>&1)
+        MD_EXIT_CODE=$? # Сохраняем код завершения mdrun
 
-        gmx_mpi solvate -cp "$(basename ${BOX_GRO})" -cs ${SOLVENT_MODEL} -o "$(basename ${SOLV_GRO})" -p "$(basename ${FINAL_TOPOLOGY})" || { echo "ОШИБКА solvate"; cd -; continue; }
-        NUM_SOL=$(grep "^SOL" "$(basename ${FINAL_TOPOLOGY})" | awk '{print $2}')
-        echo "Добавлено ${NUM_SOL} молекул воды."
+        # Выводим лог mdrun
+        echo "$MD_LOG"
 
-        printf "integrator = md\nnsteps = 0\n" > ions.mdp
-        gmx_mpi grompp -f ions.mdp -c "$(basename ${SOLV_GRO})" -p "$(basename ${FINAL_TOPOLOGY})" -o "$(basename ${IONS_TPR})" -maxwarn 1 || { echo "ОШИБКА grompp"; cd -; continue; }
-        echo "SOL" | gmx_mpi genion -s "$(basename ${IONS_TPR})" -o "$(basename ${FINAL_COORDS})" -p "$(basename ${FINAL_TOPOLOGY})" -pname NA -nname CL -neutral -conc ${SALT_CONCENTRATION} || { echo "ОШИБКА genion"; cd -; continue; }
-        echo "--> Ионы добавлены."
+        # Проверяем код завершения
+        if [ ${MD_EXIT_CODE} -ne 0 ]; then
+            echo "ОШИБКА: mdrun для ${peptide_base} завершился с кодом ${MD_EXIT_CODE}."
+            continue # Переходим к следующему пептиду
+        fi
 
-        # --- 5.E: Создание индексного файла ---
-        echo "--> 5.E: Создание ${FINAL_INDEX}"
-        NDX_LIST_OUTPUT=$(echo "q" | gmx_mpi make_ndx -f "$(basename ${FINAL_COORDS})" -o junk_temp.ndx 2>&1)
-        rm -f junk_temp.ndx
-        PROTEIN_GROUP_NUM=$(echo "${NDX_LIST_OUTPUT}" | grep -E '^[[:space:]]*[0-9]+[[:space:]]+Protein[[:space:]]+\(' | awk '{print $1}')
-        LIGAND_GROUP_NUM=$(echo "${NDX_LIST_OUTPUT}" | grep -E '^[[:space:]]*[0-9]+[[:space:]]+'"${LIGAND_MOL_NAME}"'[[:space:]]+\(' | awk '{print $1}')
-        SOL_GROUP_NUM=$(echo "${NDX_LIST_OUTPUT}" | grep -E '^[[:space:]]*[0-9]+[[:space:]]+SOL[[:space:]]+\(' | awk '{print $1}')
-        NA_GROUP_NUM=$(echo "${NDX_LIST_OUTPUT}" | grep -E '^[[:space:]]*[0-9]+[[:space:]]+NA[[:space:]]+\(' | awk '{print $1}')
-        CL_GROUP_NUM=$(echo "${NDX_LIST_OUTPUT}" | grep -E '^[[:space:]]*[0-9]+[[:space:]]+CL[[:space:]]+\(' | awk '{print $1}')
-        [[ -z "${PROTEIN_GROUP_NUM}" ]] && { echo "ОШИБКА: Не найдена группа Protein"; cd -; continue; }
-        [[ -z "${LIGAND_GROUP_NUM}" ]] && { echo "ОШИБКА: Не найдена группа ${LIGAND_MOL_NAME}"; cd -; continue; }
-        MAKE_NDX_COMMANDS="${PROTEIN_GROUP_NUM} | ${LIGAND_GROUP_NUM}\nname Protein_Ligand\n${SOL_GROUP_NUM} | ${NA_GROUP_NUM} | ${CL_GROUP_NUM}\nname Water_and_ions\nq\n"
-        echo -e "${MAKE_NDX_COMMANDS}" | gmx_mpi make_ndx -f "$(basename ${FINAL_COORDS})" -o "$(basename ${FINAL_INDEX})" || { echo "ОШИБКА make_ndx"; cd -; continue; }
+        # Проверяем финальное сообщение в логе (менее надежно, но как доп. проверка)
+        # Ищем строку типа "Finished mdrun" или время выполнения
+        if ! echo "$MD_LOG" | grep -q -E "(Finished mdrun on rank|Core t \(s\))"; then
+            echo "ОШИБКА: Финальное сообщение mdrun не найдено в логе для ${peptide_base}."
+            continue # Переходим к следующему пептиду
+        fi
+        echo "mdrun для ${peptide_base} успешно завершен."
 
-        # --- 5.F: Очистка ---
-        echo "--> 5.F: Очистка временных файлов..."
-        rm -f "$(basename ${PEPTIDE_CENTER_GRO})" "$(basename ${COMBINED_GRO})" "$(basename ${BOX_GRO})" "$(basename ${SOLV_GRO})" "$(basename ${IONS_TPR})" ions.mdp mdout*.mdp \#*#
-        cd - || exit 1
 
-        echo "--- Сборка системы ${SYSTEM_NAME} УСПЕШНО ЗАВЕРШЕНА ---"
-    done
-done
+        # Шаг 3.5: Извлечение последнего кадра
+        echo "--> Шаг 3.5: Извлечение финального кадра (${DUMP_TIME} ps) отжига для ${peptide_base}"
+        # Пытаемся извлечь из .xtc
+        if [ -f "${peptide_dir}/${peptide_base}_anneal.xtc" ]; then
+            echo "Извлечение кадра из ${peptide_dir}/${peptide_base}_anneal.xtc..."
+            echo "0" | gmx_mpi trjconv -s "${peptide_dir}/${peptide_base}_anneal.tpr" -f "${peptide_dir}/${peptide_base}_anneal.xtc" -o "${OPTIMIZED_GRO}" -dump ${DUMP_TIME} &> /dev/null
+            if [ -s "${OPTIMIZED_GRO}" ]; then # Проверяем, что файл создан и не пустой
+                 echo "Успешно извлечено из .xtc."
+            else
+                 echo "Предупреждение: Не удалось извлечь из .xtc или файл пуст."
+                 OPTIMIZED_GRO="" # Сбрасываем, чтобы попробовать trr
+            fi
+        else
+            echo "Файл .xtc не найден."
+             OPTIMIZED_GRO="" # Сбрасываем, чтобы попробовать trr
+        fi
 
-echo "--- СБОРКА ВСЕХ СИСТЕМ завершена ---"
-echo "Результаты в ${SIMULATIONS_DIR}"
+        # Если из XTC не получилось или его не было, пытаемся из TRR
+        if [ -z "${OPTIMIZED_GRO}" ] || [ ! -s "${OPTIMIZED_GRO}" ]; then
+            if [ -f "${peptide_dir}/${peptide_base}_anneal.trr" ]; then
+                echo "Попытка извлечь из ${peptide_dir}/${peptide_base}_anneal.trr..."
+                echo "0" | gmx_mpi trjconv -s "${peptide_dir}/${peptide_base}_anneal.tpr" -f "${peptide_dir}/${peptide_base}_anneal.trr" -o "${peptide_dir}/${peptide_base}_optimized.gro" -dump ${DUMP_TIME} &> /dev/null
+                if [ ! -s "${peptide_dir}/${peptide_base}_optimized.gro}" ]; then # Проверяем имя выходного файла
+                    echo "ОШИБКА: Не удалось извлечь кадр и из .trr."; continue;
+                fi
+                 echo "Успешно извлечено из .trr."
+                 OPTIMIZED_GRO="${peptide_dir}/${peptide_base}_optimized.gro}" # Обновляем имя, если успешно
+            else
+                echo "ОШИБКА: Файл .trr не найден. Не удалось извлечь финальный кадр."; continue;
+            fi
+        fi
+
+
+    # Шаг 3.6: Очистка (опционально, можно закомментировать)
+    # echo "--> Шаг 3.6: Очистка промежуточных файлов для ${peptide_base}"
+    # rm -f "${peptide_dir}/${peptide_base}_box.gro" "${peptide_dir}/anneal.mdp" "${peptide_dir}/${peptide_base}_anneal.log" "${peptide_dir}/${peptide_base}_anneal.xtc" "${peptide_dir}/${peptide_base}_anneal.trr" "${peptide_dir}/${peptide_base}_anneal.edr" "${peptide_dir}/${peptide_base}_anneal.tpr" "${peptide_dir}/${peptide_base}_anneal.gro" "${peptide_dir}/${peptide_base}_anneal.cpt" "${peptide_dir}/#*" "${peptide_dir}/*~"
+
+        echo "--- ШАГ 3 ЗАВЕРШЕН: Оптимизация пептида ${peptide_base} завершена (Тест ${ANNEAL_TOTAL_TIME} ps) ---"
+    fi # Закрывает if [ -d "${peptide_dir}" ]
+done # <--- ДОБАВЛЕНО ЗДЕСЬ
+
+echo ""
+echo "=== ОПТИМИЗАЦИЯ ВСЕХ ПЕПТИДОВ ЗАВЕРШЕНА (Тест ${ANNEAL_TOTAL_TIME} ps) ==="

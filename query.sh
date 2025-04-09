@@ -1,0 +1,6 @@
+bash step2_final_file_creation.sh
+bash step3_final_prepare.sh
+bash step4_final_parametrization.sh
+bash step5_final_assemble_auto.sh
+bash step5_final_assemble_auto2.sh
+bash step6_query_final.sh
