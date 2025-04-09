@@ -27,7 +27,7 @@ fourierspacing  = 0.16
 
 ; Температура (как в NVT)
 tcoupl          = V-rescale
-tc-grps         = Protein_AAY   Water_and_ions ; <-- ПРОВЕРЬТЕ ИМЕНА ГРУПП!
+tc-grps         = Protein_Ligand SOL_Ion
 tau_t           = 0.1           0.1
 ref_t           = 300           300
 

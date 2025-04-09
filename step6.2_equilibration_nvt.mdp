@@ -29,7 +29,7 @@ fourierspacing  = 0.16
 
 ; Температура (V-rescale) - раздельные группы для лучшего контроля
 tcoupl          = V-rescale
-tc-grps         = Protein_AAY   Water_and_ions ; <-- ПРОВЕРЬТЕ ЭТИ ИМЕНА ГРУПП!
+tc-grps         = Protein_Ligand SOL_Ion
 tau_t           = 0.1           0.1         ; Время связи (ps)
 ref_t           = 300           300         ; Целевая температура (K)
 
