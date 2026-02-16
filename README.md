@@ -138,6 +138,3 @@ Then execute:
 bash run_simulation_pipeline.sh   # Runs minimisation, equilibration, and production
 ```
 
----
-
-For any questions or issues, feel free to open an issue or adapt the scripts to your needs. Happy simulating!
