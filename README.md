@@ -1,123 +1,143 @@
-# Моделирование взаимодействия пептидов с антибиотиками (GROMACS)
+# Molecular Dynamics Simulation of Peptide-Antibiotic Interactions (GROMACS)
 
-Этот репозиторий содержит набор скриптов для автоматизированного моделирования молекулярной динамики (МД) комплексов пептид-антибиотик с использованием GROMACS и анализа результатов.
+This repository contains a set of scripts for automated molecular dynamics (MD) simulation of peptide–antibiotic complexes using GROMACS, followed by analysis of the results.
 
-## Обзор пайплайна
+## Pipeline Overview
 
-Пайплайн выполняет следующие шаги для каждой пары пептид-лиганд, найденной во входных директориях:
+For every peptide–ligand pair found in the input directories, the pipeline performs the following steps:
 
-1.  **Подготовка пептида:**
-    *   Генерация GROMACS топологии (`.top`), координат (`.gro`) и файла позиционных ограничений (`posre_*.itp`) из PDB файла пептида с помощью `gmx pdb2gmx`.
-    *   *Требуется ручная проверка/правка `.top` файла для обеспечения цикличности пептида (если применимо).*
-    *   Добавление директивы `#ifdef POSRES` в `.top` файл для использования файла позиционных ограничений.
-2.  **Оптимизация пептида (Отжиг):**
-    *   Проведение короткой МД симуляции (отжига) в вакууме для релаксации начальной структуры пептида.
-    *   Извлечение последней структуры как оптимизированной (`_optimized.gro`).
-3.  **Параметризация лиганда:**
-    *   Конвертация PDB файла лиганда в MOL2 с помощью `Open Babel`.
-    *   Назначение типов атомов GAFF2 и расчет BCC зарядов с помощью `antechamber` (из AmberTools).
-    *   Поиск недостающих параметров с помощью `parmchk2`.
-    *   Сборка AMBER топологии (`.prmtop`) и координат (`.inpcrd`) с помощью `tleap`.
-    *   Конвертация AMBER файлов в формат GROMACS (`.itp`, `_GMX.gro`) с помощью `ACPYPE`.
-    *   Извлечение определений типов атомов GAFF2 (`atomtypes_*.itp`) и позиционных ограничений (`posre_*.itp`) из промежуточных файлов ACPYPE.
-    *   Коррекция имени молекулы и пути к файлу позиционных ограничений внутри `.itp` файла лиганда.
-4.  **Сборка системы:**
-    *   Создание уникальной директории для симуляции (`output/ПЕПТИД+ЛИГАНД_Sim`).
-    *   Копирование необходимых файлов пептида и лиганда в директорию симуляции.
-    *   Объединение координат пептида и лиганда (`insert-molecules`).
-    *   Создание симуляционного бокса (`editconf`).
-    *   **Автоматическая генерация файла `system.top`:**
-        *   Включение необходимых файлов силового поля (`amber14sb.ff`), типов атомов GAFF2 (`gaff2_atomtypes.itp`), лиганда (`ligand.itp`), воды (`tip3p.itp`), ионов (`ions.itp`).
-        *   Включение определения `moleculetype` пептида (с его PosRe).
-        *   Добавление секций `[ system ]` и `[ molecules ]` (с пептидом и лигандом).
-    *   Сольватация системы водой (`solvate`).
-    *   Добавление ионов для нейтрализации и достижения нужной концентрации (`grompp`, `genion`).
-5.  **Запуск МД симуляций (выполняется отдельным скриптом):**
-    *   Перемещение собранной системы в директорию `simulations/`.
-    *   Создание индексного файла (`make_ndx`) с группами `Protein_Ligand` и `SOL_Ion`.
-    *   Копирование и адаптация MDP файлов (для `minim`, `nvt`, `npt`, `prod`) с правильными группами температуры/давления.
-    *   Последовательный запуск этапов:
-        *   Минимизация энергии (`grompp`, `mdrun`).
-        *   NVT уравновешивание (`grompp`, `mdrun` с PosRes).
-        *   NPT уравновешивание (`grompp`, `mdrun` с PosRes).
-        *   Продуктивная МД (`grompp`, `mdrun` без PosRes).
-6.  **Анализ (выполняется отдельным скриптом):**
-    *   Генерация карт контактов между остатками пептида и лигандом на основе траектории продуктивной МД с использованием Python (`MDAnalysis`, `matplotlib`).
+### Peptide Preparation
+- Generate GROMACS topology (`.top`), coordinates (`.gro`), and position restraint file (`posre_*.itp`) from the peptide PDB file using `gmx pdb2gmx`.
+- **Manual check/edit** of the `.top` file is required to ensure cyclization of the peptide (if applicable).
+- Add the directive `#ifdef POSRES` to the `.top` file to enable the use of the position restraint file.
 
-## Требования
+### Peptide Optimization (Annealing)
+- Run a short vacuum MD simulation (annealing) to relax the initial peptide structure.
+- Extract the last frame as the optimised structure (`_optimized.gro`).
 
-*   **Conda:** Установленный Miniconda или Anaconda.
-*   **Системные зависимости:**
-    *   Установленный **NVIDIA CUDA Toolkit** (версия, совместимая с GROMACS, например, 11.8 или новее).
-    *   Соответствующие **драйверы NVIDIA**.
-    *   Утилиты `wget` и `tar` (обычно присутствуют в Linux/WSL).
-    *   Утилита `bc` (обычно присутствует).
-*   **Git:** Для клонирования репозитория.
+### Ligand Parameterisation
+- Convert the ligand PDB file to MOL2 format using Open Babel.
+- Assign GAFF2 atom types and compute BCC charges with `antechamber` (from AmberTools).
+- Find missing parameters with `parmchk2`.
+- Build AMBER topology (`.prmtop`) and coordinates (`.inpcrd`) using `tleap`.
+- Convert AMBER files to GROMACS format (`.itp`, `_GMX.gro`) with ACPYPE.
+- Extract GAFF2 atom type definitions (`atomtypes_*.itp`) and position restraint file (`posre_*.itp`) from ACPYPE intermediate files.
+- Correct the molecule name and the path to the position restraint file inside the ligand `.itp` file.
 
-## Установка и запуск
+### System Assembly
+- Create a unique simulation directory (`output/PEPTIDE+LIGAND_Sim`).
+- Copy the necessary peptide and ligand files into the simulation directory.
+- Merge peptide and ligand coordinates (`insert-molecules`).
+- Create the simulation box (`editconf`).
+- Automatically generate the `system.top` file:
+  - Include required force field files (`amber14sb.ff`), GAFF2 atom types (`gaff2_atomtypes.itp`), ligand (`ligand.itp`), water (`tip3p.itp`), and ions (`ions.itp`).
+  - Include the peptide `moleculetype` definition (with its `PosRe`).
+  - Add the `[ system ]` and `[ molecules ]` sections (with peptide and ligand).
+- Solvate the system with water (`solvate`).
+- Add ions to neutralise the system and reach the desired salt concentration (`grompp`, `genion`).
 
-1.  **Клонировать репозиторий:**
-    ```bash
-    git clone https://github.com/VadimG2/antibiotic_contacs.git
-    cd antibiotic_contacs
-    ```
+### MD Simulation (executed by a separate script)
+- Move the assembled system to the `simulations/` directory.
+- Create an index file (`make_ndx`) with groups `Protein_Ligand` and `SOL_Ion`.
+- Copy and adapt MDP templates (for minim, nvt, npt, prod) with the correct temperature/pressure coupling groups.
+- Run the stages sequentially:
+  - Energy minimisation (`grompp`, `mdrun`).
+  - NVT equilibration (`grompp`, `mdrun` with position restraints).
+  - NPT equilibration (`grompp`, `mdrun` with position restraints).
+  - Production MD (`grompp`, `mdrun` without position restraints).
 
-2.  **Создать и активировать Conda окружение:**
-    ```bash
-    conda env create -f env.yaml
-    conda activate gromacs_md_env # Используйте имя окружения, указанное в env.yaml
-    ```
-    *Файл `env.yaml` содержит список всех необходимых пакетов Conda (GROMACS с CUDA, AmberTools, ACPYPE, Open Babel, Python библиотеки и т.д.).*
+### Analysis (executed by a separate script)
+- Generate contact maps between peptide residues and the ligand from the production trajectory using Python (MDAnalysis, matplotlib).
 
-3.  **Установить силовое поле AMBER14SB:**
-    *Пакет GROMACS из Conda Forge не всегда включает все силовые поля. Этот шаг скачивает и устанавливает AMBER14SB в созданное окружение.*
-    ```bash
-    wget -O ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz https://ftp.gromacs.org/contrib/forcefields/amber14sb.ff.tar.gz
-    tar -xvf ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz -C ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/
-    rm ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz
-    ```
+## Requirements
 
-4.  **Подготовить входные файлы:**
-    *   Поместите PDB файлы ваших **пептидов** в директорию `input/protein/`.
-    *   Поместите PDB файлы ваших **лигандов** (антибиотиков) в директорию `input/ligand/`.
+- **Conda**: Miniconda or Anaconda installed.
+- **System dependencies**:
+  - NVIDIA CUDA Toolkit (version compatible with GROMACS, e.g., 11.8 or newer)
+  - Appropriate NVIDIA drivers
+  - `wget` and `tar` utilities (usually present on Linux/WSL)
+  - `bc` utility (usually present)
+- **Git**: For cloning the repository.
 
-5.  **Очистить предыдущие результаты (если нужно перезапустить всё):**
-    ```bash
-    rm -rf simulations/* output/*
-    # Будьте осторожны, эта команда удалит все предыдущие результаты!
-    ```
+## Installation and Setup
 
-6  **Запустить основной скрипт пайплайна:**
-    ```bash
-    bash query.sh # Или как называется ваш основной скрипт
-    ```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/VadimG2/antibiotic_contacts.git
+   cd antibiotic_contacts
+   ```
 
-## Структура директорий
+2. **Create and activate the Conda environment**:
+   ```bash
+   conda env create -f env.yaml
+   conda activate gromacs_md_env   # use the environment name specified in env.yaml
+   ```
+   The `env.yaml` file lists all required Conda packages (GROMACS with CUDA, AmberTools, ACPYPE, Open Babel, Python libraries, etc.).
 
-*   **`input/protein/`**: Исходные PDB файлы пептидов.
-*   **`input/ligand/`**: Исходные PDB файлы лигандов.
-*   **`output/`**: Директория для промежуточных и финальных файлов.
-    *   `output/ИМЯ_ПЕПТИДА/`: Файлы подготовленного пептида (`.gro`, `.top`, `_optimized.gro`, `posre_*.itp`).
-    *   `output/ИМЯ_ЛИГАНДА/`: Файлы подготовленного лиганда (`.itp`, `_GMX.gro`, `atomtypes_*.itp`, `posre_*.itp`).
-    *   `output/ИМЯ_ПЕПТИДА+ИМЯ_ЛИГАНДА_Sim/`: Папка с собранной системой перед запуском симуляции (если скрипт сборки не перемещает ее сразу).
-*   **`simulations/`**: Директория для запуска МД симуляций.
-    *   `simulations/ИМЯ_ПЕПТИДА+ИМЯ_ЛИГАНДА/`: Рабочая папка для конкретной симуляции, содержит `.tpr`, `.log`, `.xtc`, `.edr`, `index.ndx` и т.д.
-*   **`scripts/`** (Рекомендуется): Папка для хранения bash-скриптов пайплайна (`prepare_peptides.sh`, `prepare_ligands.sh`, `assemble_systems.sh`, `run_simulations.sh`, `analyze_contacts.py`).
-*   **`mdp_files/`** (Рекомендуется): Папка для хранения шаблонных `.mdp` файлов.
-*   **`env.yaml`**: Файл для создания окружения Conda.
-*   **`README.md`**: Этот файл.
+3. **Install the AMBER14SB force field**:
+   The GROMACS package from Conda Forge may not include all force fields. This step downloads and installs AMBER14SB into the created environment.
+   ```bash
+   wget -O ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz https://ftp.gromacs.org/contrib/forcefields/amber14sb.ff.tar.gz
+   tar -xvf ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz -C ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/
+   rm ~/miniconda3/envs/gromacs_md_env/share/gromacs/top/amber14sb.ff.tar.gz
+   ```
+   *(Adjust the path if your Conda installation is not in `~/miniconda3`)*
 
-**ВАЖНО! Чтобы все файлы назывались в формате peptX и ligX, например, pept1 и lig1 (но не обязательно номера, например pept_something и lig_something)**
+4. **Prepare input files**:
+   - Place your peptide PDB files in `input/protein/`.
+   - Place your ligand (antibiotic) PDB files in `input/ligand/`.
 
-## Запуск симуляций (Шаг 6)
+5. **Clean previous results** (if you need to restart from scratch):
+   ```bash
+   rm -rf simulations/* output/*
+   # This command deletes all previous results – use with caution!
+   ```
 
-После того как скрипт сборки системы (`step5_...`) успешно отработает и создаст папки `*_Sim` (и они будут перемещены в `simulations/`), необходимо запустить скрипт симуляций (например, `run_simulation_pipeline.sh v16`, который мы обсуждали).
+6. **Run the main pipeline script**:
+   ```bash
+   bash query.sh   # or whatever your main script is named
+   ```
 
-Перед запуском `run_simulation_pipeline.sh` убедитесь, что:
+## Directory Structure
 
-1.  Папки с собранными системами находятся в директории `simulations/`.
-2.  Шаблонные MDP файлы (`step6.*.mdp`) находятся в корневой директории проекта.
-3.  Вы находитесь в активированном окружении Conda (`gromacs_md_env`).
+```
+.
+├── input/
+│   ├── protein/          # Raw peptide PDB files
+│   └── ligand/           # Raw ligand PDB files
+├── output/
+│   ├── PEPTIDE_NAME/          # Prepared peptide files (.gro, .top, _optimized.gro, posre_*.itp)
+│   ├── LIGAND_NAME/           # Prepared ligand files (.itp, _GMX.gro, atomtypes_*.itp, posre_*.itp)
+│   └── PEPTIDE+LIGAND_Sim/    # Assembled system (before moving to simulations/)
+├── simulations/
+│   └── PEPTIDE+LIGAND/        # Working directory for a specific simulation (.tpr, .log, .xtc, .edr, index.ndx, …)
+├── scripts/                    # (Recommended) Bash pipeline scripts (prepare_peptides.sh, prepare_ligands.sh, assemble_systems.sh, run_simulations.sh, analyze_contacts.py)
+├── mdp_files/                  # (Recommended) Template .mdp files
+├── env.yaml                    # Conda environment specification
+└── README.md                   # This file
+```
 
+## Important Notes
+
+- **File naming convention**: All peptide and ligand files should follow the format `peptX` and `ligX` (e.g., `pept1`, `lig1`), but they do not have to be numbers – patterns like `pept_something` and `lig_something` are also acceptable.
+- The main pipeline script is `query.sh`. After successful system assembly, you will need to run the simulation script separately (see below).
+- The pipeline assumes a **neutral or charged system**; ion concentration can be adjusted in the ion addition step.
+
+## Running Simulations (Step 6)
+
+After the system assembly script (e.g., `step5_...`) completes successfully and creates folders named `*_Sim` (which are then moved into `simulations/`), you need to launch the simulation script (e.g., `run_simulation_pipeline.sh v16` as discussed).
+
+Before running `run_simulation_pipeline.sh`, ensure:
+
+- The assembled system folders are inside the `simulations/` directory.
+- Template MDP files (e.g., `step6.*.mdp`) are located in the project root directory.
+- You are inside the activated Conda environment (`gromacs_md_env`).
+
+Then execute:
 ```bash
-bash run_simulation_pipeline.sh # Запуск минимизации, уравновешивания и продакшена
+bash run_simulation_pipeline.sh   # Runs minimisation, equilibration, and production
+```
+
+---
+
+For any questions or issues, feel free to open an issue or adapt the scripts to your needs. Happy simulating!
